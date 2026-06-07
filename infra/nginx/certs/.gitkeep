@@ -1,0 +1,3 @@
+# Thư mục chứa chứng chỉ TLS cho Nginx.
+# Sinh self-signed cert cho môi trường demo bằng:  make gencert
+# Sẽ tạo: tls.crt và tls.key (đã được .gitignore loại trừ).

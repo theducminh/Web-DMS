@@ -1,0 +1,167 @@
+# VDT Zero-Trust DMS — One-command deploy (NFR-3.1, NFR-3.2): docker compose up -d
+# Kiến trúc 4 lớp: React SPA -> Nginx (TLS 1.3) -> NestJS (api + worker) -> Supabase (PostgreSQL managed) / Redis / MinIO
+
+services:
+  # ---------------------------------------------------------------------------
+  # DATA LAYER (local stateful)
+  # ---------------------------------------------------------------------------
+  redisinsight:
+    image: redis/redisinsight:latest
+    container_name: vdt-redisinsight
+    ports:
+      - "8001:5540"
+    networks:
+      - websec-network
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    container_name: vdt-redis
+    restart: always
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-vdt_redis}"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-vdt_redis}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - websec-network
+
+  minio:
+    image: minio/minio:latest
+    container_name: vdt-minio
+    restart: always
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-vdt_minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-vdt_minio_secret}
+      MINIO_KMS_SECRET_KEY: ${MINIO_KMS_SECRET_KEY:-vdt-demo-key:OMfWMJtx5cU4FJcy0o24wsIOVZ+tEHzxnNrryxoEe9Y=}
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Web Console
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - websec-network # <-- ĐƯA MINIO VÀO MẠNG CHUNG
+
+  minio-setup:
+    image: minio/mc:latest
+    container_name: vdt-minio-setup
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "/setup.sh"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-vdt_minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-vdt_minio_secret}
+      MINIO_BUCKET: ${MINIO_BUCKET:-vdt-docs}
+    volumes:
+      - ./infra/minio/setup.sh:/setup.sh:ro
+    networks:
+      - websec-network # <-- ĐƯA SETUP VÀO MẠNG CHUNG
+
+  # ---------------------------------------------------------------------------
+  # APPLICATION LAYER (NestJS)
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: vdt-api
+    restart: always
+    depends_on:
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      APP_ROLE: api
+    expose:
+      - "3000"
+    ports:
+      - "3000:3000"
+    networks:
+      - websec-network # <-- ĐƯA BACKEND VÀO MẠNG CHUNG
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: vdt-worker
+    restart: always
+    depends_on:
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      APP_ROLE: worker
+    command: ["node", "dist/workers/main.worker.js"]
+    networks:
+      - websec-network # <-- ĐƯA WORKER VÀO MẠNG CHUNG
+
+  diff-engine:
+    build:
+      context: ./diff-engine
+      dockerfile: Dockerfile
+    container_name: vdt-diff-engine
+    restart: always
+    expose:
+      - "8000"
+    ports:
+      - "8000:8000"
+    networks:
+      - websec-network # <-- ĐƯA DIFF ENGINE VÀO MẠNG CHUNG
+
+  # ---------------------------------------------------------------------------
+  # CLIENT LAYER & PROXY LAYER
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: vdt-frontend
+    restart: always
+    expose:
+      - "80"
+    networks:
+      - websec-network # <-- ĐƯA FRONTEND VÀO MẠNG CHUNG
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: vdt-nginx
+    restart: always
+    depends_on:
+      - backend
+      - frontend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./infra/nginx/certs:/etc/nginx/certs:ro
+    networks:
+      - websec-network # <-- ĐƯA NGINX VÀO MẠNG CHUNG
+
+networks:
+  websec-network:
+    driver: bridge
+
+volumes:
+  redisdata:
+  miniodata:

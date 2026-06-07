@@ -1,0 +1,6 @@
+-- [ĐÃ HỢP NHẤT] Việc tạo extension (pg_trgm, pgcrypto) và index full-text đã được
+-- chuyển vào bộ migration chính thức để đồng bộ giữa Supabase và Docker local:
+--   - supabase/migrations/0001_init_schema.sql   (CREATE EXTENSION pg_trgm, pgcrypto)
+--   - supabase/migrations/0004_search_indexes.sql (GIN trgm indexes)
+--
+-- File này được giữ lại để tham khảo; docker-compose không còn mount nó nữa.
