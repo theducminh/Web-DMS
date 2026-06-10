@@ -9,6 +9,8 @@ import { DocumentAccessService } from './document-access.service';
 import { FoldersService } from './folders.service';
 import { DocumentsService } from './documents.service';
 import { DiffService } from './diff.service';
+import { DocumentValidator } from './document-validator.service';
+import { DocumentVersionFactory } from './document-version.factory';
 import { AuthModule } from '../auth/auth.module';
 
 /**
@@ -19,7 +21,14 @@ import { AuthModule } from '../auth/auth.module';
 @Module({
   imports: [AuthModule], // D4 (Phase 5): để dùng MailService gửi notification "xin trả khóa"
   controllers: [FoldersController, DocumentUploadController, DocumentsController, DiffController],
-  providers: [DocumentAccessService, FoldersService, DocumentsService, DiffService],
+  providers: [
+    DocumentAccessService,
+    FoldersService,
+    DocumentsService,
+    DiffService,
+    DocumentValidator, // F4 (Phase 6) SOLID — SRP cho validation logic
+    DocumentVersionFactory, // F4 (Phase 6) SOLID — SRP cho storage + version creation
+  ],
   exports: [DocumentAccessService],
 })
 export class DocumentsModule {}

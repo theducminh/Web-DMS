@@ -1,0 +1,70 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "title": "VDT DMS — System Overview",
+  "tags": ["vdt", "overview"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-30m", "to": "now" },
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Containers Up",
+      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+      "targets": [{ "expr": "count(up == 1)", "refId": "A" }],
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "red", "value": 0 }, { "color": "green", "value": 5 }] } } }
+    },
+    {
+      "id": 2, "type": "gauge", "title": "Disk Usage %",
+      "gridPos": { "x": 4, "y": 0, "w": 6, "h": 4 },
+      "targets": [{ "expr": "(1 - node_filesystem_avail_bytes{mountpoint=\"/\"} / node_filesystem_size_bytes{mountpoint=\"/\"}) * 100", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "steps": [{ "color": "green", "value": 0 }, { "color": "yellow", "value": 70 }, { "color": "red", "value": 85 }] } } }
+    },
+    {
+      "id": 3, "type": "stat", "title": "Backend 5xx rate (5m)",
+      "gridPos": { "x": 10, "y": 0, "w": 4, "h": 4 },
+      "targets": [{ "expr": "sum(rate(http_requests_total{status=~\"5..\"}[5m])) / sum(rate(http_requests_total[5m]))", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "thresholds": { "steps": [{ "color": "green", "value": 0 }, { "color": "yellow", "value": 0.005 }, { "color": "red", "value": 0.01 }] } } }
+    },
+    {
+      "id": 4, "type": "stat", "title": "Redis Memory (%)",
+      "gridPos": { "x": 14, "y": 0, "w": 4, "h": 4 },
+      "targets": [{ "expr": "(redis_memory_used_bytes / redis_memory_max_bytes) * 100", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "percent", "thresholds": { "steps": [{ "color": "green", "value": 0 }, { "color": "yellow", "value": 70 }, { "color": "red", "value": 85 }] } } }
+    },
+    {
+      "id": 10, "type": "timeseries", "title": "CPU Usage per Container",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "targets": [{ "expr": "sum by (name) (rate(container_cpu_usage_seconds_total{name!=\"\"}[1m])) * 100", "refId": "A", "legendFormat": "{{ name }}" }],
+      "fieldConfig": { "defaults": { "unit": "percent" } }
+    },
+    {
+      "id": 11, "type": "timeseries", "title": "Memory Usage per Container (MB)",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "targets": [{ "expr": "container_memory_usage_bytes{name!=\"\"} / 1024 / 1024", "refId": "A", "legendFormat": "{{ name }}" }],
+      "fieldConfig": { "defaults": { "unit": "decbytes" } }
+    },
+    {
+      "id": 20, "type": "timeseries", "title": "Network Ingress (MB/s)",
+      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+      "targets": [{ "expr": "sum by (name) (rate(container_network_receive_bytes_total{name!=\"\"}[1m])) / 1024 / 1024", "refId": "A", "legendFormat": "{{ name }} in" }],
+      "fieldConfig": { "defaults": { "unit": "MBs" } }
+    },
+    {
+      "id": 21, "type": "timeseries", "title": "Network Egress (MB/s)",
+      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+      "targets": [{ "expr": "sum by (name) (rate(container_network_transmit_bytes_total{name!=\"\"}[1m])) / 1024 / 1024", "refId": "A", "legendFormat": "{{ name }} out" }],
+      "fieldConfig": { "defaults": { "unit": "MBs" } }
+    },
+    {
+      "id": 30, "type": "timeseries", "title": "HTTP Request Rate by Status",
+      "gridPos": { "x": 0, "y": 20, "w": 24, "h": 8 },
+      "targets": [{ "expr": "sum by (status) (rate(http_requests_total[1m]))", "refId": "A", "legendFormat": "{{ status }}" }],
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    }
+  ]
+}

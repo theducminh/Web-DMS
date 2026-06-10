@@ -21,8 +21,8 @@ import { BackButton } from '../../shared/ui/BackButton';
 type SecurityLevel = 'PUBLIC' | 'INTERNAL' | 'CONFIDENTIAL';
 
 const ALLOWED_EXT = ['pdf', 'docx', 'md', 'txt'];
-const MAX_BYTES = 50 * 1024 * 1024; // 50MB hard cap
-const NO_DIFF_BYTES = 15 * 1024 * 1024; // > 15MB: backend skip text-extraction → no Diff
+// F1 (Phase 6): Spec capstone giới hạn 5MB cứng (mentor decision).
+const MAX_BYTES = 5 * 1024 * 1024; // 5MB hard cap
 
 interface FolderNode {
   id: string;
@@ -71,7 +71,7 @@ export function DocumentUploadPage() {
   const ext = file ? (file.name.split('.').pop() ?? '').toLowerCase() : '';
   const sizeMB = file ? file.size / 1024 / 1024 : 0;
   const oversized = file && file.size > MAX_BYTES;
-  const noDiffWarning = file && file.size > NO_DIFF_BYTES && file.size <= MAX_BYTES;
+  const noDiffWarning = false; // F1 Phase 6: 5MB = max, không còn no-diff zone
   const badExt = file && !ALLOWED_EXT.includes(ext);
 
   const errors = useMemo(() => {
@@ -80,7 +80,7 @@ export function DocumentUploadPage() {
     if (badExt) e.push(`Định dạng .${ext} không được hỗ trợ. Chỉ chấp nhận: ${ALLOWED_EXT.join(', ')}.`);
     if (oversized)
       e.push(
-        `Dung lượng file ${sizeMB.toFixed(1)}MB vượt giới hạn 50MB của hệ thống (Gateway sẽ trả 413).`,
+        `Dung lượng file ${sizeMB.toFixed(2)}MB vượt giới hạn 5MB của hệ thống (Gateway sẽ trả 413).`,
       );
     return e;
   }, [file, ext, badExt, oversized, sizeMB]);
@@ -302,7 +302,7 @@ export function DocumentUploadPage() {
           </button>
 
           <p className="text-xs text-gray-400 text-center">
-            File &gt; 15MB sẽ skip bóc tách text (no-Diff). Giới hạn cứng 50MB.
+            Giới hạn cứng <b>5MB</b> theo spec capstone. Hỗ trợ <code>.pdf .docx .md .txt</code>.
           </p>
         </div>
       </div>
@@ -416,7 +416,7 @@ function Dropzone({
             Hoặc <span className="text-viettel-red underline">click để chọn</span> từ máy tính.
           </div>
           <div className="text-xs text-gray-400 mt-3">
-            Hỗ trợ: <b>.pdf .docx .md .txt</b> · Tối đa 50MB · &gt; 15MB sẽ no-Diff
+            Hỗ trợ: <b>.pdf .docx .md .txt</b> · Tối đa <b>5MB</b> (spec capstone)
           </div>
         </div>
       )}

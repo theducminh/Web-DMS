@@ -14,6 +14,8 @@ import { ReleasesModule } from './modules/releases/releases.module';
 import { SecurityModule } from './modules/security/security.module';
 import { PoliciesModule } from './modules/policies/policies.module';
 import { TemplatesModule } from './modules/templates/templates.module';
+import { SearchModule } from './modules/search/search.module';
+import { MetricsModule } from './infra/metrics/metrics.module';
 
 /**
  * Root Module — Modular Monolith.
@@ -38,7 +40,8 @@ import { TemplatesModule } from './modules/templates/templates.module';
     SecurityModule, //    [Luồng 23, 24, 25]
     PoliciesModule, //    [Luồng 21, 22]
     TemplatesModule, //   [Luồng 26]
-    // SearchModule,      // [Global Search]
+    SearchModule, //      [F2 Phase 6 — Global Search Ctrl+K]
+    MetricsModule, //     [F3 Phase 6 — Prometheus /metrics endpoint]
   ],
 })
 export class AppModule {}

@@ -1,0 +1,46 @@
+# VDT Zero-Trust DMS — Prometheus scrape config (F3 Phase 6)
+# Scrape metrics từ 4 nguồn: backend, node, cadvisor, redis, nginx.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
+scrape_configs:
+  # 1. Prometheus tự scrape
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # 2. NestJS backend custom metrics (@willsoto/nestjs-prometheus expose /metrics)
+  - job_name: 'vdt-backend'
+    metrics_path: /api/v1/metrics
+    static_configs:
+      - targets: ['backend:3000']
+    scheme: http
+
+  # 3. Node exporter (host CPU/RAM/disk/network)
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+
+  # 4. cAdvisor (container metrics)
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+
+  # 5. Redis exporter
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+
+# Lưu ý: Bỏ job nginx-exporter vì chưa enable stub_status + container exporter.
+# Có thể bật lại sau bằng cách thêm service nginx-exporter (nginx/nginx-prometheus-exporter:latest)
+# và config /stub_status trong nginx.conf.

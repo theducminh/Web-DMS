@@ -26,7 +26,8 @@ interface ProcessedFile {
 }
 
 const ALLOWED_EXT = ['pdf', 'docx', 'md', 'txt'];
-const MAX_BYTES = 50 * 1024 * 1024;
+// F1 (Phase 6): Spec capstone giới hạn 5MB cứng.
+const MAX_BYTES = 5 * 1024 * 1024;
 
 export function UploadFolderModal({
   projectId,
@@ -68,7 +69,7 @@ export function UploadFolderModal({
         message = `Định dạng .${ext} không hỗ trợ`;
       } else if (f.size > MAX_BYTES) {
         status = 'skipped';
-        message = `File ${(f.size / 1024 / 1024).toFixed(1)}MB > 50MB`;
+        message = `File ${(f.size / 1024 / 1024).toFixed(2)}MB > 5MB`;
       }
 
       processed.push({ file: f, relPath, status, message });
@@ -202,7 +203,7 @@ export function UploadFolderModal({
             <ol className="list-decimal ml-5 mt-1">
               <li>Tự tạo cây thư mục con tương ứng trong dự án (nếu chưa có).</li>
               <li>Upload từng file vào đúng folder đích.</li>
-              <li>File &gt; 50MB hoặc định dạng không hỗ trợ sẽ bị bỏ qua.</li>
+              <li>File &gt; 5MB hoặc định dạng không hỗ trợ sẽ bị bỏ qua (spec capstone).</li>
             </ol>
           </div>
 

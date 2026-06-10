@@ -17,9 +17,8 @@ import { AuditService } from '../../core/audit/audit.service';
 import { AuthenticatedUser } from '../../core/types/authenticated-user';
 import { DocumentAccessService } from './document-access.service';
 import { UploadDocumentDto } from './dto/documents.dto';
-
-const ALLOWED_TYPES = ['pdf', 'docx', 'md', 'txt'];
-const EXTRACTABLE = ['pdf', 'docx', 'md', 'txt'];
+import { DocumentValidator, EXTRACTABLE_DOCUMENT_TYPES } from './document-validator.service';
+import { DocumentVersionFactory } from './document-version.factory';
 
 @Injectable()
 export class DocumentsService {
@@ -32,106 +31,68 @@ export class DocumentsService {
     private readonly storage: MinioS3Service,
     private readonly audit: AuditService,
     private readonly access: DocumentAccessService,
+    // F4 (Phase 6) SOLID refactor: 2 collaborator chuyên trách
+    private readonly validator: DocumentValidator,
+    private readonly versionFactory: DocumentVersionFactory,
     @InjectQueue(TEXT_EXTRACTION_QUEUE) private readonly extractionQueue: Queue,
   ) {}
 
-  // --- Luồng 15: Upload (tạo mới hoặc version mới) ---
+  /**
+   * F4 (Phase 6) — Luồng 15: Upload tài liệu (mới hoặc version kế tiếp).
+   *
+   * SOLID refactor: method này giờ chỉ ORCHESTRATE 5 bước rõ ràng, KHÔNG còn
+   * trộn lẫn validation + storage + version logic. Mỗi bước delegate cho 1
+   * collaborator phù hợp:
+   *   (1) ABAC check          -> DocumentAccessService
+   *   (2) Validate input      -> DocumentValidator     (SRP)
+   *   (3) Resolve documentId  -> private helper (orchestration)
+   *   (4) Tạo version + store -> DocumentVersionFactory (SRP)
+   *   (5) Side-effects        -> audit + queue extraction
+   *
+   * Open-Closed: thêm rule validate mới = thêm method vào DocumentValidator,
+   * KHÔNG sửa method này. Đổi storage provider = swap DocumentVersionFactory,
+   * KHÔNG sửa method này.
+   */
   async upload(projectId: string, file: Express.Multer.File, dto: UploadDocumentDto, user: AuthenticatedUser) {
     if (!file) throw new BadRequestException('Thiếu file tải lên.');
+
+    // (1) ABAC
     await this.access.assertCanEdit(projectId, user);
     await this.access.assertProjectActive(projectId);
 
-    const fileType = (file.originalname.split('.').pop() ?? '').toLowerCase();
-    if (!ALLOWED_TYPES.includes(fileType)) {
-      throw new BadRequestException(`Định dạng không hỗ trợ. Chỉ chấp nhận: ${ALLOWED_TYPES.join(', ')}.`);
-    }
+    // (2) Validate file type (whitelist .pdf/.docx/.md/.txt)
+    const fileType = this.validator.validateFileType(file.originalname);
 
-    // Xác định document (mới hay đè version)
-    let documentId = dto.documentId;
-    if (documentId) {
-      const existing = await this.prisma.document.findUnique({ where: { id: documentId }, select: { projectId: true, status: true } });
-      if (!existing || existing.projectId !== projectId) throw new NotFoundException('Tài liệu không tồn tại trong dự án.');
-      if (existing.status === 'UNDER_REVIEW') {
-        throw new ForbiddenException('Tài liệu đang chờ duyệt, không thể tải bản mới.');
-      }
-    } else {
-      // Chống trùng tên trong CÙNG folder (không count soft-deleted documents)
-      const folderId = dto.folderId ?? null;
-      const dup = await this.prisma.document.findFirst({
-        where: {
-          projectId,
-          folderId,
-          title: dto.title,
-          isDeleted: false,
-        },
-        select: { id: true, title: true },
-      });
-      if (dup) {
-        throw new BadRequestException(
-          `Tài liệu tên "${dto.title}" đã tồn tại trong thư mục này. Vui lòng đổi tên hoặc bấm "Upload version mới" trên tài liệu cũ.`,
-        );
-      }
+    // (3) Resolve document — tạo mới hoặc xác nhận document đang tồn tại
+    const documentId = await this.resolveDocumentId(projectId, dto, user.sub);
 
-      const created = await this.prisma.document.create({
-        data: {
-          projectId,
-          folderId,
-          title: dto.title,
-          securityLevel: (dto.securityLevel ?? 'INTERNAL') as any,
-          status: 'DRAFT',
-          createdBy: user.sub,
-        },
-      });
-      documentId = created.id;
-    }
-
-    const last = await this.prisma.documentVersion.findFirst({
-      where: { documentId },
-      orderBy: { versionNo: 'desc' },
-      select: { versionNo: true },
-    });
-    const versionNo = (last?.versionNo ?? 0) + 1;
-    const safeName = file.originalname.replace(/[^\w.\-]+/g, '_');
-    const storageKey = `projects/${projectId}/${documentId}/v${versionNo}_${safeName}`;
-
-    // Stream lên MinIO kèm SSE-S3
-    await this.storage.putObject(storageKey, file.buffer, file.mimetype);
-
-    const version = await this.prisma.documentVersion.create({
-      data: {
-        documentId,
-        versionNo,
-        storageKey,
-        fileType,
-        fileSize: BigInt(file.size),
-        commitMessage: dto.commitMessage,
-        uploadedBy: user.sub,
-        textExtracted: false,
-      },
+    // (4) Tạo version + push storage + reset DRAFT (factory đảm nhiệm)
+    const version = await this.versionFactory.storeAndCreateVersion({
+      documentId,
+      projectId,
+      fileType,
+      fileBuffer: file.buffer,
+      fileSize: file.size,
+      originalName: file.originalname,
+      mimeType: file.mimetype,
+      commitMessage: dto.commitMessage,
+      uploadedBy: user.sub,
     });
 
-    // Upload đè -> tài liệu quay về DRAFT, giải phóng khóa
-    await this.prisma.document.update({
-      where: { id: documentId },
-      data: { status: 'DRAFT', lockedBy: null },
-    });
-    await this.redis.client.del(`doc:lock:${documentId}`);
-
-    // Bóc tách text bất đồng bộ (BullMQ) nếu đủ điều kiện dung lượng
-    if (EXTRACTABLE.includes(fileType) && file.size < this.extractMax) {
+    // (5) Side-effects
+    if (EXTRACTABLE_DOCUMENT_TYPES.includes(fileType) && file.size < this.extractMax) {
       await this.extractionQueue.add('extract', {
         documentVersionId: version.id,
-        storageKey,
+        storageKey: version.storageKey,
         fileType,
       });
     }
-
     await this.audit.log({
       action: 'DOCUMENT_UPLOAD',
       userId: user.sub,
       targetId: documentId,
       isSuccess: true,
-      metadata: { versionNo, fileType, fileSize: file.size },
+      metadata: { versionNo: version.versionNo, fileType, fileSize: file.size },
     });
 
     return {
@@ -139,6 +100,35 @@ export class DocumentsService {
       versionId: version.id,
       message: 'Tải lên thành công. File đang được xử lý ngầm.',
     };
+  }
+
+  /**
+   * Helper private — KHÔNG export. Chỉ orchestrate giữa Validator và Prisma:
+   *   - Nếu dto.documentId có sẵn: validate Document tồn tại + đúng project + không UNDER_REVIEW
+   *   - Nếu chưa có: validate không trùng tên + tạo Document row mới
+   */
+  private async resolveDocumentId(
+    projectId: string,
+    dto: UploadDocumentDto,
+    userId: string,
+  ): Promise<string> {
+    if (dto.documentId) {
+      await this.validator.assertDocumentEditable(dto.documentId, projectId);
+      return dto.documentId;
+    }
+    const folderId = dto.folderId ?? null;
+    await this.validator.assertNoDuplicateTitle(projectId, folderId, dto.title);
+    const created = await this.prisma.document.create({
+      data: {
+        projectId,
+        folderId,
+        title: dto.title,
+        securityLevel: (dto.securityLevel ?? 'INTERNAL') as any,
+        status: 'DRAFT',
+        createdBy: userId,
+      },
+    });
+    return created.id;
   }
 
   // --- Luồng 16: Chi tiết tài liệu ---

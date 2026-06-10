@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useSessionStore } from '../../entities/session/session.store';
 import { logoutRequest } from '../../features/auth-actions/api/auth.api';
+import { GlobalSearchModal } from '../global-search/GlobalSearchModal';
 
 const navItem =
   'px-3 py-2 rounded text-sm font-medium hover:bg-gray-700 hover:text-white transition-colors';
@@ -19,6 +20,7 @@ export function MainLayout() {
   const isAdmin = useSessionStore((s) => s.isAdmin());
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Đóng dropdown khi click ngoài
@@ -28,6 +30,18 @@ export function MainLayout() {
     };
     document.addEventListener('mousedown', handle);
     return () => document.removeEventListener('mousedown', handle);
+  }, []);
+
+  // F2 (Phase 6): Ctrl+K / Cmd+K mở Global Search
+  useEffect(() => {
+    const handle = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        setSearchOpen(true);
+      }
+    };
+    document.addEventListener('keydown', handle);
+    return () => document.removeEventListener('keydown', handle);
   }, []);
 
   const onLogout = async () => {
@@ -114,8 +128,22 @@ export function MainLayout() {
 
       {/* Main */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Topbar B5 redesign: chip role + chip department + avatar dropdown */}
-        <header className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
+        {/* Topbar B5 redesign: search Ctrl+K + chip role/department + avatar dropdown */}
+        <header className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between gap-4">
+          {/* F2: Global Search button */}
+          <button
+            onClick={() => setSearchOpen(true)}
+            className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-md text-sm text-gray-500 transition-colors shrink-0"
+          >
+            <span>🔍</span>
+            <span className="hidden md:inline">Tìm tài liệu, dự án, người...</span>
+            <kbd className="hidden lg:inline-block ml-4 text-xs bg-white border px-1.5 py-0.5 rounded font-mono">
+              Ctrl K
+            </kbd>
+          </button>
+
+          <div className="flex-1" />
+
           <div className="flex items-center gap-2 text-sm">
             {user?.department && (
               <span
@@ -218,6 +246,9 @@ export function MainLayout() {
           <Outlet />
         </main>
       </div>
+
+      {/* F2 (Phase 6): Global Search Modal */}
+      <GlobalSearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />
     </div>
   );
 }

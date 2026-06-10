@@ -514,6 +514,130 @@ docker compose up -d postgres
 - Deployment: 7 service Docker Compose + Supabase Cloud + 1-lệnh `make up`.
 - Documents: PROGRESS.md (tracker) + GUIDE.md (vận hành) + reports/BaoCao_VDT_DMS.docx (40+ trang Word) + reports/Slides_VDT_DMS.pptx (25 slides).
 
+---
+
+### Phase 6 — Mentor Feedback Roadmap (chưa implement, đợi user quyết định)
+
+Sau buổi review, mentor đã đưa ra 5 nhận xét quan trọng. Chưa có item nào được implement, dưới đây là phân tích chi tiết + đề xuất:
+
+**#1 Monitoring + Alerting với Grafana** *(P1 — high impact, ~3-4h)*
+- Vấn đề: Hệ thống không có infra-level metrics, chỉ có application-level audit (Redis ZSET anomaly download).
+- Giải pháp: Thêm 4 container compose:
+  - `prometheus` (scrape metrics + lưu time-series)
+  - `grafana` (dashboard + alerting UI)
+  - `node-exporter` (CPU/RAM/disk/network host)
+  - `cadvisor` (container metrics)
+  - Plus exporters: `redis-exporter`, `nginx-prometheus-exporter`
+  - Backend: thêm `@willsoto/nestjs-prometheus` expose `/metrics`
+- Alert rules đề xuất (Prometheus Alertmanager):
+  - `DiskUsageHigh` > 85% / `DiskUsageCritical` > 95%
+  - `NetworkIngressSpike` > 100MB/s sustained 5m (theo yêu cầu mentor — không phụ thuộc download counter)
+  - `Backend5xxRate` > 1%
+  - `DBLatencyHigh` p99 > 500ms
+  - `BullMQQueueBacklog` > 100 jobs in 10m
+  - `RedisMemoryHigh` > 85%
+- Notification: Email Gmail SMTP (đã có) + optional Slack/Telegram.
+
+**#2 Global Search tài liệu** *(P1 — high UX impact, ~6-8h)*
+- Vấn đề: User mới không biết tìm tài liệu ở đâu, phải click qua folder thủ công.
+- Giải pháp 2 tầng:
+  - Tầng Backend: tận dụng `pg_trgm` GIN index có sẵn + thêm column `documents.tsv` tsvector generated (title + commit_message + raw_text join). Endpoint mới `GET /search?q=...&type=document|project|user&filters=...`.
+  - Tầng Frontend: ô search topbar với shortcut `Ctrl+K`, dropdown results chia 3 nhóm (Documents/Projects/Users) + facet filters (project, status, securityLevel, author, date) + highlight matched keyword + "Recently viewed" + autocomplete debounce 200ms.
+
+**#3 Audit log rewrite Kafka + ElasticSearch** *(P2 — production critical, ~12-16h)*
+- Vấn đề: Hash Chaining trigger PG hiện tại có lock contention nghiêm trọng. Trigger `SELECT current_hash ... ORDER BY timestamp DESC LIMIT 1` cần serialize → 300 user online sẽ bottleneck ~50-100 ops/s. PG disk cũng phình theo chiều dọc.
+- Giải pháp 3 lớp lưu trữ:
+  - HOT: Kafka topic `audit-events` (1 partition để đảm bảo order)
+  - WARM: ElasticSearch cluster + ILM auto-rotate monthly indices (1 năm retention)
+  - COLD: PostgreSQL `audit_anchors` table compact (chỉ lưu hash anchor mỗi 10s, ~3M rows/năm thay vì 100M+ events)
+- Flow:
+  ```
+  Backend (fire-and-forget) → Kafka → Hash Worker (single-partition consume)
+    → Redlock global → SHA256 chain → bulk index ES (batch 100/1s)
+    → mỗi 10s commit anchor hash vào PG (cold non-repudiation)
+  ```
+- Throughput dự kiến: 50-100 ops/s → 10,000+ ops/s.
+- Trade-off: Phức tạp infra tăng (3 service mới), cần kỹ năng Kafka/ES vận hành. Cân nhắc nếu hệ thống <50 concurrent users thì giữ PG nhưng partition theo tuần thay vì tháng.
+
+**#4 Spec file < 5MB** *(P0 — quick win, ~30 phút)*
+- Hiện tại `MAX_UPLOAD_BYTES=52428800` (50MB).
+- Fix: đổi sang `MAX_UPLOAD_BYTES=5242880` (5MB) + `TEXT_EXTRACT_MAX_BYTES=5242880`.
+- Update:
+  - `.env` + `.env.example`
+  - `infra/nginx/nginx.conf` → `client_max_body_size 6m;`
+  - `frontend/src/pages/documents/DocumentUploadPage.tsx` → `MAX_BYTES = 5 * 1024 * 1024`
+  - `frontend/src/features/folder-upload/UploadFolderModal.tsx` → cùng
+  - `docs/architecture/15-document-upload.md` → spec mới
+  - `reports/BaoCao_VDT_DMS.docx` → rebuild
+  - PROGRESS.md §6 → note.
+
+**#5 SOLID refactor** *(P2 — code quality, ~10-14h)*
+- Vi phạm hiện tại + giải pháp:
+  - **SRP**: `AuthService` (~350 dòng, 6 việc) tách thành `AuthLoginService` / `AuthRegisterService` / `AuthRecoveryService` / `SessionService`. `DocumentsService` (~400 dòng) tách thành `DocumentUploadService` / `DocumentVersionService` / `DocumentDownloadService` / `AnomalyDetectionService`.
+  - **OCP**: hardcode `ALLOWED_TYPES = ['pdf','docx','md','txt']` → Strategy pattern `IFileExtractor` interface + 4 implementation registered qua DI.
+  - **LSP**: `MinioS3Service` concrete → interface `IObjectStorage` + `MinioStorage` / `AwsS3Storage` / `AzureBlobStorage`. Tương tự `IMailProvider` cho Nodemailer/SES/SendGrid.
+  - **ISP**: `AuthService` lộ all public methods → tách `IAuthLogin` / `IAuthSession` / `IAuthRegister` để consumer inject đúng cái cần.
+  - **DIP**: service inject `PrismaService` trực tiếp → Repository pattern `IDocumentRepository` / `IUserRepository` / `IAuditRepository` (abstraction over Prisma).
+
+### Bảng ưu tiên Phase 6
+| Ưu tiên | Item | Effort | Impact | User-facing |
+|---|---|---|---|---|
+| **P0** | #4 Spec 5MB | 30' | LOW | Nhỏ — chỉ giới hạn upload |
+| **P1** | #1 Grafana monitoring | 3-4h | HIGH | Indirect — Admin/DevOps |
+| **P1** | #2 Global Search | 6-8h | HIGH | Direct — mọi user thấy ô search Ctrl+K |
+| **P2** | #3 Kafka+ES rewrite | 12-16h | HIGH (production scale) | Indirect — performance |
+| **P2** | #5 SOLID refactor | 10-14h | MEDIUM | None — code quality only |
+
+**Trạng thái:** Đã phân tích đầy đủ. Chờ user chọn implement item nào.
+
+### Phase 6 thực thi — Roadmap mentor approved
+
+User quyết định: **#3 Kafka+ES** chuyển vào "Future Works" (over-engineering cho 6 tuần + laptop demo), **#5 SOLID** SKIP. Thứ tự thực thi: #4 → #2 → #1 (theo ROI).
+
+**✅ F1 (Spec 5MB):**
+- `.env` + `.env.example`: `MAX_UPLOAD_BYTES=5242880` + `TEXT_EXTRACT_MAX_BYTES=5242880`
+- `infra/nginx/nginx.conf`: `client_max_body_size 6m` (2 chỗ: top + /storage location)
+- `frontend/src/pages/documents/DocumentUploadPage.tsx`: `MAX_BYTES = 5 * 1024 * 1024`, bỏ NO_DIFF_BYTES, error message "5MB", message UI "Giới hạn cứng 5MB"
+- `frontend/src/features/folder-upload/UploadFolderModal.tsx`: cùng 5MB
+
+**✅ F2 (Global Search Ctrl+K):**
+- Backend mới `modules/search/`: SearchService dùng raw SQL với `pg_trgm` `similarity()` + `ILIKE '%q%'` (vì threshold default 0.3 quá cao, dùng OR + threshold 0.15 trong WHERE). 3 query: searchDocuments (Data Isolation theo accessibleProjectIds — admin search all qua searchDocumentsAll), searchProjects, searchUsers (match cả fullName + email, GREATEST score).
+- Endpoint `GET /search?q=...&limit=8`. Trả 3 nhóm + total + score per hit.
+- Frontend `widgets/global-search/GlobalSearchModal.tsx`: Ctrl+K mở modal, debounce 200ms, 3 sections (Documents/Projects/Users) với HighlightMatch component, keyboard nav (↑↓Enter Esc), score % hiển thị.
+- MainLayout: button search trong topbar + keydown handler Ctrl+K/Cmd+K toàn cục.
+- Verify: search "duc" trả 2 user + 1 doc; search "test" trả 2 docs với similarity score 0.27, 0.26.
+
+**✅ F3 (Prometheus + Grafana):**
+- 5 file config infra/ tạo sẵn:
+  - `infra/prometheus/prometheus.yml` (5 scrape jobs sau khi bỏ nginx-exporter: prometheus, backend, node-exporter, cadvisor, redis)
+  - `infra/prometheus/alerts.yml` (9 alert rules: DiskUsageHigh/Critical, ContainerMemoryHigh, NetworkIngressSpike/EgressSpike, BackendDown, Backend5xxRate, RedisMemoryHigh, RedisDown)
+  - `infra/grafana/provisioning/datasources/prometheus.yml` + `dashboards/dashboards.yml`
+  - `infra/grafana/dashboards/vdt-overview.json` (8 panel: Containers Up, Disk %, 5xx rate, Redis %, CPU/RAM per container, Network ingress/egress, HTTP rate by status)
+- `docker-compose.yml` đã thêm 5 service: prometheus (9090), grafana (3001), node-exporter, cadvisor, redis-exporter
+- Backend đã có MetricsModule: `backend/src/infra/metrics/{metrics.module.ts, metrics.controller.ts}` — controller dùng `@Public()` để Prometheus scrape không cần JWT, expose `/api/v1/metrics`
+- `app.module.ts` wire MetricsModule sau SearchModule
+- `package.json` thêm 2 deps: `@willsoto/nestjs-prometheus@^6.0.1` + `prom-client@^15.1.3`
+- User cần chạy 1 lần: `docker compose up -d --build backend` để cài 2 npm package mới rồi rebuild image
+- Optional: Alertmanager service + Gmail SMTP notification (config sẵn trong DEVELOPMENT.md)
+
+**✅ F4 (SOLID refactor — chỉ DocumentsService.upload):**
+- Tách `upload()` (~110 dòng làm 7 việc) thành orchestrator ~30 dòng + 2 collaborator chuyên trách:
+  - `backend/src/modules/documents/document-validator.service.ts` — SRP: `validateFileType`, `assertDocumentEditable`, `assertNoDuplicateTitle`. Export whitelist `ALLOWED_DOCUMENT_TYPES` + `EXTRACTABLE_DOCUMENT_TYPES`.
+  - `backend/src/modules/documents/document-version.factory.ts` — SRP: `getNextVersionNo` + `storeAndCreateVersion` (storage + DB + reset DRAFT + release lock).
+- DocumentsService giờ orchestrate 5 bước rõ ràng (ABAC → Validate → Resolve docId → CreateVersion → Side effects). Helper private `resolveDocumentId()` tách luồng tạo mới vs upload version.
+- DIP: Service phụ thuộc abstraction (2 collaborator) thay vì trực tiếp Prisma + MinIO + Redis cho phần upload.
+- DocumentsModule providers thêm 2 service mới.
+
+**✅ F-Dev (Multi-developer Workflow):**
+- `docs/WSL2_SETUP.md` — Hướng dẫn dev nhiều người: cài WSL2 Ubuntu, Docker WSL Integration, clone code vào `~/vdt-dms/` (KHÔNG `/mnt/c/` vì I/O chậm 5-20× + file watcher chết), copy `.env` riêng, troubleshooting 8 case, checklist 9 mục.
+- `docker-compose.dev.yaml` — Override compose cho dev: backend NestJS watch mode (port 9229 expose cho VSCode attach debugger), worker nodemon watch dist, frontend Vite HMR (port 5173 trực tiếp), diff-engine uvicorn --reload. Mỗi service dùng `image: node:20-alpine` thay Dockerfile production + bind-mount source + named volume cho `node_modules`.
+- `DEVELOPMENT.md` — 2 chế độ chạy (prod vs dev), alias shortcut shell, dev backend với breakpoint VSCode launch.json mẫu, dev frontend Vite HMR, dev diff-engine, dev infra (nginx reload + prometheus reload API), debug pattern, quy ước team git/commit/PR.
+- `backend/package.json` thêm devDep `nodemon@^3.1.7` cho worker watch mode.
+- **`scripts/`** — 14 file wrap workflow team: `install.sh` (setup lần đầu), `dev-up/dev-down/dev-logs/dev-restart/dev-shell/dev-exec/dev-rebuild/dev-debug.sh`, `prod-up/prod-down.sh`, `status.sh` (curl 7 endpoint), `reset.sh`, `_common.sh` (shared: preflight check Docker + .env, log helpers màu), `README.md` (quick start + FAQ). Mỗi script tự check pre-flight + in usage rõ ràng khi truyền `-h`. Không phụ thuộc alias cá nhân — toàn team gõ lệnh giống nhau.
+- `DEVELOPMENT.md` refactor toàn bộ ví dụ lệnh sang `./scripts/*.sh`, thêm bảng "Lệnh thuần docker compose" ở cuối cho user muốn bypass script.
+
+**🔄 F5 (Word + Slides Future Works):** Đang chờ — sẽ rebuild reports/BaoCao_VDT_DMS.docx + Slides_VDT_DMS.pptx với section "Kiến trúc mở rộng — Kafka + ElasticSearch Hybrid Hot/Warm/Cold" cho phần demo bảo vệ.
+
 **Còn lại Phase C, D, E:**
 - C: Preview/Edit/Diff (#1, #2, #3, #7, #8, #11, #16, #12 Google SSO)
 - D: Bổ sung features (Dashboard locked docs, Click locked-by → profile, Request unlock, Create empty file, Upload folder, Policy guide, Hash Chain explainer)

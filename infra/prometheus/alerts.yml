@@ -1,0 +1,108 @@
+# VDT Zero-Trust DMS — Alert rules (F3 Phase 6)
+# Mentor yêu cầu: disk vượt %, network input đột biến.
+
+groups:
+  - name: vdt-infra
+    interval: 30s
+    rules:
+      # ===== Disk Alerts =====
+      - alert: DiskUsageHigh
+        expr: |
+          (1 - node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+          category: disk
+        annotations:
+          summary: "Disk usage > 85% ({{ $value | humanize }}%)"
+          description: "Server disk vượt 85%. Cần dọn dẹp log, archive old data, hoặc mở rộng volume."
+
+      - alert: DiskUsageCritical
+        expr: |
+          (1 - node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 > 95
+        for: 2m
+        labels:
+          severity: critical
+          category: disk
+        annotations:
+          summary: "🚨 CRITICAL: Disk > 95% ({{ $value | humanize }}%)"
+          description: "Disk gần đầy — hệ thống có nguy cơ sập. Cần xử lý NGAY."
+
+      # ===== Memory Alerts =====
+      - alert: ContainerMemoryHigh
+        expr: |
+          (container_memory_usage_bytes / container_spec_memory_limit_bytes) * 100 > 90
+        for: 3m
+        labels:
+          severity: warning
+          category: memory
+        annotations:
+          summary: "Container {{ $labels.name }} RAM > 90%"
+          description: "Container {{ $labels.name }} dùng {{ $value | humanize }}% RAM limit."
+
+      # ===== Network Alerts (mentor yêu cầu — không phụ thuộc download counter) =====
+      - alert: NetworkIngressSpike
+        expr: |
+          rate(container_network_receive_bytes_total[5m]) > 100 * 1024 * 1024
+        for: 5m
+        labels:
+          severity: critical
+          category: network
+        annotations:
+          summary: "🚨 Network ingress spike > 100MB/s sustained 5m"
+          description: "Container {{ $labels.name }} nhận {{ $value | humanize }}B/s — có thể DDoS hoặc exfiltration."
+
+      - alert: NetworkEgressSpike
+        expr: |
+          rate(container_network_transmit_bytes_total[5m]) > 100 * 1024 * 1024
+        for: 5m
+        labels:
+          severity: critical
+          category: network
+        annotations:
+          summary: "🚨 Network egress spike > 100MB/s sustained 5m"
+          description: "Container {{ $labels.name }} gửi đi {{ $value | humanize }}B/s — nghi exfiltration data."
+
+      # ===== Backend Health =====
+      - alert: BackendDown
+        expr: up{job="vdt-backend"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          category: availability
+        annotations:
+          summary: "🚨 Backend API DOWN"
+          description: "Backend NestJS không response /metrics > 1 phút."
+
+      - alert: Backend5xxRate
+        expr: |
+          rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m]) > 0.01
+        for: 5m
+        labels:
+          severity: warning
+          category: errors
+        annotations:
+          summary: "Backend 5xx error rate > 1%"
+          description: "Backend trả 5xx ở mức {{ $value | humanizePercentage }} trong 5 phút qua."
+
+      # ===== Redis =====
+      - alert: RedisMemoryHigh
+        expr: |
+          redis_memory_used_bytes / redis_memory_max_bytes > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          category: redis
+        annotations:
+          summary: "Redis RAM > 85%"
+          description: "Redis dùng {{ $value | humanizePercentage }} bộ nhớ. Có thể bị OOM evict session/cache."
+
+      - alert: RedisDown
+        expr: up{job="redis"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          category: redis
+        annotations:
+          summary: "🚨 Redis DOWN"
+          description: "Redis không response — toàn bộ session/queue/cache mất."

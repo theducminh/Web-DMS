@@ -117,7 +117,14 @@
       "Bash(pdfinfo BaoCao_VDT_DMS.pdf)",
       "Bash(python -c ' *)",
       "Bash(node build-slides.js)",
-      "Bash(PYTHONIOENCODING=utf-8 python -c ' *)"
+      "Bash(PYTHONIOENCODING=utf-8 python -c ' *)",
+      "Bash(MSYS_NO_PATHCONV=1 docker run --rm -v \"D:/WEB SEC/backend\":/app -w /app node:20-alpine sh -c \"npx tsc --noEmit 2>&1 | tail -10\")",
+      "Bash(tail -5)",
+      "Bash(sleep 12)",
+      "Bash(echo \"\")",
+      "Bash(echo \"=== Smoke test F2 Global Search ===\")",
+      "Bash(tail -3)",
+      "Bash(sleep 10)"
     ]
   }
 }
